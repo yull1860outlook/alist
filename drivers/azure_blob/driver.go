@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
 	"github.com/alist-org/alist/v3/internal/driver"
 	"github.com/alist-org/alist/v3/internal/model"
+	log "github.com/sirupsen/logrus"
 )
 // Azure Blob Storage based on the blob APIs
 // Link: https://learn.microsoft.com/rest/api/storageservices/blob-service-rest-api
@@ -84,7 +85,10 @@ func (d *AzureBlob) Drop(ctx context.Context) error {
 
 // List retrieves blobs and directories under the specified path.
 func (d *AzureBlob) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
-	prefix := ensureTrailingSlash(dir.GetPath())
+	folder := dir.GetPath()
+	log.Debugf("b4 listBlobs at [%s]",folder)
+	prefix := ensureTrailingSlash(folder)  	// when list at root we should use nil
+						// for subfolders should be "subfolder/"	
 
 	pager := d.containerClient.NewListBlobsHierarchyPager("/", &container.ListBlobsHierarchyOptions{
 		Prefix: &prefix,
@@ -99,26 +103,39 @@ func (d *AzureBlob) List(ctx context.Context, dir model.Obj, args model.ListArgs
 
 		// Process directories
 		for _, blobPrefix := range page.Segment.BlobPrefixes {
+			log.Debugf("subfolder[%s] at [%s] ",*blobPrefix.Name,folder)
+			//fmt.Println("\tpro: ",*blobPrefix.Properties)
+			var subfoldername = path.Base(strings.TrimSuffix(*blobPrefix.Name, "/"))
 			objs = append(objs, &model.Object{
-				Name:     path.Base(strings.TrimSuffix(*blobPrefix.Name, "/")),
+				Name:     subfoldername,
 				Path:     *blobPrefix.Name,
-				Modified: *blobPrefix.Properties.LastModified,
-				Ctime:    *blobPrefix.Properties.CreationTime,
+				//Modified: *blobPrefix.Properties.LastModified,
+				//Ctime:    *blobPrefix.Properties.CreationTime,
 				IsFolder: true,
 			})
 		}
 
 		// Process files
+		var bSize int64 = 0
+		var tmModified time.Time 
+
 		for _, blob := range page.Segment.BlobItems {
 			if strings.HasSuffix(*blob.Name, "/") {
 				continue
 			}
+			log.Debugf("Blobs [%s] at [%s]",*blob.Name,folder)
+			fmt.Println("\tpro: ",*blob.Properties)
+
+			if blob.Properties != nil {
+				bSize = *blob.Properties.ContentLength
+				tmModified = *blob.Properties.LastModified
+			}
 			objs = append(objs, &model.Object{
 				Name:     path.Base(*blob.Name),
 				Path:     *blob.Name,
-				Size:     *blob.Properties.ContentLength,
-				Modified: *blob.Properties.LastModified,
-				Ctime:    *blob.Properties.CreationTime,
+				Size:     bSize,
+				Modified: tmModified,
+				//Ctime:    *blob.Properties.CreationTime,
 				IsFolder: false,
 			})
 		}
