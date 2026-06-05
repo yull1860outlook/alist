@@ -18,6 +18,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/model"
 	log "github.com/sirupsen/logrus"
 )
+
 // Azure Blob Storage based on the blob APIs
 // Link: https://learn.microsoft.com/rest/api/storageservices/blob-service-rest-api
 type AzureBlob struct {
@@ -86,15 +87,18 @@ func (d *AzureBlob) Drop(ctx context.Context) error {
 // List retrieves blobs and directories under the specified path.
 func (d *AzureBlob) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	folder := dir.GetPath()
-	log.Debugf("b4 listBlobs at [%s]",folder)
-	prefix := ensureTrailingSlash(folder)  	// when list at root we should use nil
-						// for subfolders should be "subfolder/"	
+	log.Debugf("b4 listBlobs at [%s]", folder)
+	prefix := ensureTrailingSlash(folder) // when list at root we should use nil
+	// for subfolders should be "subfolder/"
 
 	pager := d.containerClient.NewListBlobsHierarchyPager("/", &container.ListBlobsHierarchyOptions{
 		Prefix: &prefix,
 	})
 
 	var objs []model.Obj
+	var bSize int64
+	var tmModified time.Time
+	var subfoldername string
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
@@ -103,29 +107,32 @@ func (d *AzureBlob) List(ctx context.Context, dir model.Obj, args model.ListArgs
 
 		// Process directories
 		for _, blobPrefix := range page.Segment.BlobPrefixes {
-			log.Debugf("subfolder[%s] at [%s] ",*blobPrefix.Name,folder)
+			log.Debugf("subfolder[%s] at [%s] ", *blobPrefix.Name, folder)
 			//fmt.Println("\tpro: ",*blobPrefix.Properties)
-			var subfoldername = path.Base(strings.TrimSuffix(*blobPrefix.Name, "/"))
+			subfoldername = path.Base(strings.TrimSuffix(*blobPrefix.Name, "/"))
+			tmModified = time.Now()
+			if blobPrefix.Properties != nil {
+				tmModified = *blobPrefix.Properties.LastModified
+			}
 			objs = append(objs, &model.Object{
 				Name:     subfoldername,
 				Path:     *blobPrefix.Name,
-				//Modified: *blobPrefix.Properties.LastModified,
+				Modified: tmModified,
 				//Ctime:    *blobPrefix.Properties.CreationTime,
 				IsFolder: true,
 			})
 		}
 
 		// Process files
-		var bSize int64 = 0
-		var tmModified time.Time 
 
 		for _, blob := range page.Segment.BlobItems {
 			if strings.HasSuffix(*blob.Name, "/") {
 				continue
 			}
-			log.Debugf("Blobs [%s] at [%s]",*blob.Name,folder)
-			fmt.Println("\tpro: ",*blob.Properties)
-
+			log.Debugf("Blobs [%s] at [%s]", *blob.Name, folder)
+			//fmt.Println("\tpro: ",*blob.Properties)
+			tmModified = time.Now()
+			bSize = 0
 			if blob.Properties != nil {
 				bSize = *blob.Properties.ContentLength
 				tmModified = *blob.Properties.LastModified
